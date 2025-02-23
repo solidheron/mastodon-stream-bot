@@ -9,198 +9,262 @@ import random
 
 # Load environment variables
 load_dotenv()
-MASTODON_ACCESS_TOKEN = "MASTODON_ACCESS_TOKEN"
-#os.environ["OLLAMA_HOME"] = r"D:\ollama_ai" #line if you need to change the code
-PEERTUBE_INSTANCE = "replace.this"  # Replace with your PeerTube instance URL
+MASTODON_ACCESS_TOKEN = "mastodon_token_here"
+os.environ["OLLAMA_HOME"] = r"D:\ollama_ai"
 
-# Set the path to your local Ollama model
-ollama_path = r"D:\ollama_ai"
+# List of PeerTube instances to check
+PEERTUBE_INSTANCES = [
+    "https://dalek.zone",
+    "https://peertube.wtf"
+]
+
+# List of Owncast instances to check
+OWNCAST_INSTANCES = [
+    "https://kuso.business",
+    "https://live.kitsunech.jp.net",
+    "https://stream.ozoned.net/",
+    "https://live.expiredpopsicle.com",
+    "https://stream.repeatro.de/",
+    "https://ety.cybre.stream",
+    "https://live.hatnix.net/",
+    "https://cast.31337.one"
+]
 
 # Initialize Mastodon API
+## change instance if your use another instance
 mastodon = Mastodon(access_token=MASTODON_ACCESS_TOKEN, api_base_url="https://mastodon.social")
 
-# File to store posted live streams and their update time
+# CSV file for tracking posted videos and streams
 CSV_FILE = "live_streams_posted.csv"
-# File to store posted live streams
-CSV_FILE = "owncast_live_streams_posted.csv"
 
-# PeerTube API URL to get live videos
-API_URL = f"{PEERTUBE_INSTANCE}/api/v1/videos"
-
-# List of User URLs to track
-# User URLs to track on PeerTube
+# List of tracked PeerTube accounts
 USER_URLS = [
-    "https://tube.vencabot.com/accounts/vencabot",    
-    "https://dalek.zone/accounts/solidheron"
+    "https://vid.northbound.online/accounts/lyn1337",
+    "https://tube.vencabot.com/accounts/vencabot",
+    "https://video.gamerstavern.online/accounts/nico198x",
+    "https://video.firesidefedi.live/accounts/firesidefedi",
+    "https://video.mycrowd.ca/accounts/ellyse",
+    "https://peertube.wtf/accounts/northwestwind",
+    "https://dingusmacdongle.live/"
 ]
 
-# Owncast instances to track
-OWNCAST_INSTANCES = [
-    "https://mthrbord.tv/",
-    "https://live.retrostrange.com/"
-]
-# this sections is for peertube
-def generate_random_emoji():
-    """Return a random emoji from a predefined list."""
-    emojis = [
-        "🎥", "🔴", "✨", "🔥", "🎮", "🎤", "📺", "💥", "🕹️", "🎉", "🚀", "👾", "🥳", "💡", "🎶"
-    ]
-    return random.choice(emojis)
 
-def generate_mastodon_message(video_title, video_url, mastodon_description):
-    """Generate the Mastodon post message with random emojis."""
-    emoji_1 = generate_random_emoji()
-    emoji_2 = generate_random_emoji()
-
-    message = f"""{emoji_1} LIVE NOW on PeerTube!
-{emoji_2} Watch here: {video_url}  
-{mastodon_description} #peertube #livestream #stream #twitch"""
-    
-    return message
-
-def load_posted_videos():
-    """Read the CSV file and return a dictionary of posted video URLs with their updatedAt values."""
-    posted_videos = {}
+# Load posted streams
+def load_posted_streams():
+    """Read the CSV file and return a dictionary of posted video URLs with timestamps."""
+    posted_streams = {}
     if not os.path.exists(CSV_FILE):
-        return posted_videos
+        print("No CSV file found, starting fresh.")
+        return posted_streams
     
     with open(CSV_FILE, mode="r", newline="", encoding="utf-8") as file:
         reader = csv.reader(file)
         for row in reader:
             if len(row) < 2:
-                # Skip any malformed or empty rows
-                continue
+                continue  # Skip rows with less than 2 values
             video_url = row[0]
-            updated_at = row[1]
-            posted_videos[video_url] = updated_at  # Store video URL and updatedAt as a dictionary key-value pair
-    return posted_videos
+            updated_at = row[1] if len(row) > 1 else ''
+            posted_streams[video_url] = updated_at
+    
+    print(f"Loaded {len(posted_streams)} previously posted streams.")
+    return posted_streams
 
-def save_posted_video(video_url, updated_at):
-    """Append a new video URL and its updatedAt value to the CSV file."""
+# Save new posted streams
+def save_posted_stream(video_url, updated_at):
+    """Append a new stream URL and timestamp to the CSV file."""
     with open(CSV_FILE, mode="a", newline="", encoding="utf-8") as file:
         writer = csv.writer(file)
         writer.writerow([video_url, updated_at])
+    print(f"Saved new stream: {video_url}")
 
+# Generate description using Ollama
 def generate_mastodon_description(video_title):
     """Use Ollama model to generate a Mastodon post description."""
     try:
+        print(f"Generating description for: {video_title}")
         prompt = f"Write a short, engaging Mastodon post (under 250 characters) for a live stream titled '{video_title}'."
+        
         response = ollama.chat(model="qwen2.5-coder:7b", messages=[{"role": "user", "content": prompt}])
-        description = response.get("message", {}).get("content", "").strip()
+        
+        # Extracting the message content properly
+        if 'message' in response and 'content' in response['message']:
+            description = response['message']['content'].strip()
+        elif 'content' in response:
+            description = response['content'].strip()
+        else:
+            print(f"Unexpected response format: {response}")
+            return None
+        
+        print(f"Generated description: {description}")
         return description
     except Exception as e:
         print(f"Error generating description: {e}")
         return None
 
-def get_live_streams_from_api():
-    """Fetch live videos from the PeerTube API and post to Mastodon."""
-    posted_videos = load_posted_videos()
 
-    try:
-        params = {'live': 'true', 'per_page': 10}
-        response = requests.get(API_URL, params=params)
-        response.raise_for_status()
-
-        json_response = response.json()
-
-        videos = json_response.get('data') or json_response.get('videos')
-
-        if not videos:
-            print("No live videos found.")
-            return
-
-        for video in videos:
-            video_url = video.get('url', '')
-            video_title = video.get('name', '')
-            is_live = video.get('isLive', False)
-            updated_at = video.get('updatedAt', '')  # Get the updatedAt timestamp
-
-            # Check if the video is live and belongs to a tracked user account
-            if (is_live and video_url 
-                and any(user_url in video.get('account', {}).get('url', '') for user_url in USER_URLS)
-                and (video_url not in posted_videos or posted_videos[video_url] != updated_at)):  # Compare updatedAt values
-                
-                mastodon_description = generate_mastodon_description(video_title)
-                if mastodon_description:
-                    message = generate_mastodon_message(video_title, video_url, mastodon_description)
-                    mastodon.status_post(message, visibility="public")
-                    save_posted_video(video_url, updated_at)  # Save the new updatedAt value
-                    time.sleep(random.uniform(2, 5))  # Sleep to avoid rate limiting
-    
-    except requests.RequestException as e:
-        print(f"Error fetching live streams from PeerTube: {e}")
-        
-#Owncast data retreval section
-def load_owncast_posted_streams():
-    """Read the CSV file and return a dictionary of posted stream URLs with start times."""
-    if not os.path.exists(CSV_FILE):
-        return set()
-    
-    with open(CSV_FILE, mode="r", newline="", encoding="utf-8") as file:
-        reader = csv.reader(file)
-        return {row[0]: row[1] for row in reader}  # First column contains stream URLs
-
-def save_owncast_posted_stream(stream_url, start_time):
-    """Append a new live stream URL to the CSV file."""
-    with open(CSV_FILE, mode="a", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file)
-        writer.writerow([stream_url, start_time])
-
-def check_owncast_live_status(instance_url):
-    """Check if an Owncast instance is currently streaming and return start time."""
-    try:
-        response = requests.get(f"{instance_url}/api/status", timeout=5)
-        response.raise_for_status()
-        
-        data = response.json()
-        return data.get("online", False), data.get("lastConnectTime", "Unknown")  # 'online' should be True if live
-    except requests.RequestException as e:
-        print(f"Error checking stream status for {instance_url}: {e}")
-        return False, "Unknown"
-
-def generate_owncast_random_emoji():
+# Random emoji generator
+def generate_random_emoji():
     """Return a random emoji from a predefined list."""
     emojis = ["🎥", "🔴", "✨", "🔥", "🎮", "🎤", "📺", "💥", "🕹️", "🎉", "🚀", "👾", "🥳", "💡", "🎶"]
     return random.choice(emojis)
 
-def generate_owncast_mastodon_description(instance_url):
-    """Use Ollama model to generate a Mastodon post description."""
-    try:
-        prompt = f"Write a short, engaging Mastodon post (under 250 characters) for a live stream happening at {instance_url}."
-        response = ollama.chat(model="qwen2.5-coder:7b", messages=[{"role": "user", "content": prompt}])
-        description = response['message']['content'].strip()
-        return description
-    except Exception as e:
-        print(f"Error generating description: {e}")
-        return None
+import random
 
-def generate_owncast_mastodon_message(instance_url, mastodon_description):
-    """Generate the Mastodon post message with random emojis."""
-    emoji_1, emoji_2 = generate_owncast_random_emoji(), generate_owncast_random_emoji()
-    message = f"""{emoji_1} LIVE NOW on Owncast!
-{emoji_2} Watch here: {instance_url}  
-{mastodon_description} #owncast #livestream #stream"""
-    return message
+# Define different post templates
+POST_TEMPLATES = [
+    "{emoji} LIVE NOW on PeerTube! {emoji}\nWatch here: {url}\n{description} #peertube #livestream #stream #twitch",
+    "{emoji} Join the chaos! We're live now on PeerTube: {url} {emoji}\n{description}\n#peertube #livestream #stream #twitch",
+    "🚨 {emoji} Attention! We're live now! {emoji}\nCatch the stream here: {url}\n{description}\n#peertube #livestream #twitch",
+    "🎥 {emoji} We're LIVE! Watch us play: {url}\n{description}\n#peertube #livestream #stream #twitch",
+    "{emoji} Watch us live NOW on PeerTube: {url} {emoji}\n{description}\n#peertube #livestream #stream #twitch",
+]
 
-def check_and_post_owncast_streams():
-    """Check all Owncast instances and post to Mastodon if live."""
-    posted_streams = load_owncast_posted_streams()
-    
-    for instance_url in OWNCAST_INSTANCES:
-        is_live, start_time = check_owncast_live_status(instance_url)
-        if is_live and (instance_url not in posted_streams or posted_streams.get(instance_url) != start_time):
-            print(f"{instance_url} is live! Posting to Mastodon...")
-            mastodon_description = generate_owncast_mastodon_description(instance_url)
-            if mastodon_description:
-                message = generate_owncast_mastodon_message(instance_url, mastodon_description)
+def generate_post_template(video_url, description):
+    """Generate a random post template with the provided video URL and description."""
+    template = random.choice(POST_TEMPLATES)
+    emoji = generate_random_emoji()  # Get a random emoji
+    return template.format(emoji=emoji, url=video_url, description=description)
+
+
+def get_live_streams_from_peertube():
+    """Fetch live PeerTube videos from multiple instances and post to Mastodon if not already posted."""
+    posted_streams = load_posted_streams()
+    generated_descriptions = {}
+
+    for instance in PEERTUBE_INSTANCES:
+        api_url = f"{instance}/api/v1/videos"
+        print(f"Checking {instance} for live streams...")
+
+        try:
+            params = {'live': 'true', 'per_page': 10}
+            response = requests.get(api_url, params=params, timeout=10)
+            response.raise_for_status()
+            videos = response.json().get('data') or response.json().get('videos')
+
+            if not videos:
+                print(f"No live videos found on {instance}.")
+                continue
+
+            for video in videos:
+                video_url = video.get('url', '')
+                video_title = video.get('name', '')
+                is_live = video.get('isLive', False)
+                updated_at = video.get('createdAt', '')
+
+                if not video_url:
+                    print("Skipping video with no URL.")
+                    continue
+
+                if video_url in posted_streams:
+                    print(f"Already posted: {video_url}. Skipping...")
+                    continue
+
+                account_url = video.get('account', {}).get('url', '')
+                if is_live and any(user_url in account_url for user_url in USER_URLS):
+                    print(f"Found live stream: {video_title} ({video_url})")
+
+                    # Check if description has already been generated for this stream
+                    if video_url not in generated_descriptions:
+                        mastodon_description = generate_mastodon_description(video_title)
+                        if mastodon_description:
+                            generated_descriptions[video_url] = mastodon_description
+                        else:
+                            print(f"Skipping posting due to missing description for {video_url}")
+                            continue
+
+                    description = generated_descriptions.get(video_url)
+
+                    # Generate post message using a random template
+                    message = generate_post_template(video_url, description)
+
+                    try:
+                        mastodon.status_post(message, visibility="public")
+                        print(f"Toot sent: {message}")
+                        save_posted_stream(video_url, updated_at)
+                        time.sleep(random.uniform(2, 5))
+                    except Exception as e:
+                        print(f"Error posting to Mastodon: {e}")
+
+        except requests.RequestException as e:
+            print(f"Error fetching PeerTube streams from {instance}: {e}")
+
+
+
+# Define different post templates for Owncast
+OWNCAST_POST_TEMPLATES = [
+    "{emoji} LIVE NOW on Owncast! {emoji}\nWatch here: {url}\n{description} #owncast #livestream #stream #selfhosted",
+    "{emoji} Join the stream! We're live on Owncast: {url} {emoji}\n{description}\n#owncast #livestream #stream #selfhosted",
+    "🚨 {emoji} We're live on Owncast! {emoji}\nCatch the stream here: {url}\n{description}\n#owncast #livestream #twitch",
+    "🎥 {emoji} We're streaming LIVE! Watch now on Owncast: {url}\n{description}\n#owncast #livestream #stream #selfhosted",
+    "{emoji} Watch us live NOW on Owncast: {url} {emoji}\n{description}\n#owncast #livestream #stream #twitch",
+]
+
+def generate_owncast_post_template(video_url, description):
+    """Generate a random post template for Owncast with the provided video URL and description."""
+    template = random.choice(OWNCAST_POST_TEMPLATES)
+    emoji = generate_random_emoji()  # Get a random emoji
+    return template.format(emoji=emoji, url=video_url, description=description)
+
+
+def get_live_streams_from_owncast():
+    """Fetch live streams from multiple Owncast instances and post to Mastodon if not already posted."""
+    posted_streams = load_posted_streams()
+    generated_descriptions = {}
+
+    for instance in OWNCAST_INSTANCES:
+        api_url = f"{instance}/api/status"
+        print(f"Checking {instance} for live status...")
+
+        try:
+            response = requests.get(api_url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            if not data.get("online", False):
+                print(f"No live stream on {instance}.")
+                continue
+
+            video_url = instance
+            video_title = data.get("streamTitle", "Live Stream")
+            updated_at = data.get("lastConnectTime", "")
+
+            if video_url in posted_streams:
+                print(f"Already posted: {video_url}. Skipping...")
+                continue
+
+            print(f"Found live Owncast stream: {video_title} ({video_url})")
+
+            # Check if description has already been generated for this stream
+            if video_url not in generated_descriptions:
+                mastodon_description = generate_mastodon_description(video_title)
+                if mastodon_description:
+                    generated_descriptions[video_url] = mastodon_description
+                else:
+                    print(f"Skipping posting due to missing description for {video_url}")
+                    continue
+
+            description = generated_descriptions.get(video_url)
+
+            # Generate post message using a random template for Owncast
+            message = generate_owncast_post_template(video_url, description)
+
+            try:
                 mastodon.status_post(message, visibility="public")
                 print(f"Toot sent: {message}")
-                save_owncast_posted_stream(instance_url, start_time)
-        else:
-            print(f"{instance_url} is not live or already posted.")
+                save_posted_stream(video_url, updated_at)
+                time.sleep(random.uniform(2, 5))
+            except Exception as e:
+                print(f"Error posting to Mastodon: {e}")
 
+        except requests.RequestException as e:
+            print(f"Error fetching Owncast stream from {instance}: {e}")
+
+
+# Main loop
 if __name__ == "__main__":
     while True:
-        get_live_streams_from_api()
-        check_and_post_owncast_streams()
-        time.sleep(600)  # Wait for 10 minutes before running again
+        print("Starting new cycle...")
+        get_live_streams_from_peertube()
+        get_live_streams_from_owncast()
+        print("Sleeping for 10 minutes...\n")
+        time.sleep(600)  # Wait 10 minutes before checking again
